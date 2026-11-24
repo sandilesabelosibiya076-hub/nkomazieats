@@ -1,0 +1,8 @@
+{
+  "name": "Nkomazi Eats",
+  "description": "Local Nkomazi marketplace app for food, iPhones, and electronics. Browse verified Nkomazi shops, upload your business, log in with email, and receive order status email notifications.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

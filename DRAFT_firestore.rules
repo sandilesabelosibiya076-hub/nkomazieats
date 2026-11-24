@@ -1,0 +1,514 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------
+    // Global Security Primitives
+    // ---------------------------------------------------------
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return isVerified() && (
+        request.auth.token.email == 'sandilesabelosibiya076@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidTown(town) {
+      return town in [
+        'Malalane',
+        'Komatipoort',
+        'Tonga',
+        'Kamaqhekeza',
+        'Naas',
+        'Hectorspruit',
+        'Schoemansdal',
+        'Matsamo',
+        'Buffelspruit',
+        'Driekoppies',
+        'Sibange',
+        'Jeppes Reef'
+      ];
+    }
+
+    function isValidCategory(cat) {
+      return cat in ['food', 'iphones', 'electronics'];
+    }
+
+    function isValidOrderStatus(status) {
+      return status in ['pending', 'confirmed', 'preparing', 'out_for_delivery', 'delivered', 'cancelled'];
+    }
+
+    // ---------------------------------------------------------
+    // Validation Blueprints
+    // ---------------------------------------------------------
+    function isValidShop(data) {
+      return data.keys().hasAll([
+        'ownerId', 'name', 'category', 'town', 'address',
+        'contactPhone', 'description', 'deliveryFee', 'etaMinutes',
+        'isOpen', 'imageUrl', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'ownerId', 'name', 'category', 'town', 'address',
+        'contactPhone', 'whatsappPhone', 'openingHours', 'description',
+        'deliveryFee', 'etaMinutes', 'isOpen', 'imageUrl', 'latitude', 'longitude', 'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.ownerId) &&
+      data.name is string && data.name.size() >= 2 && data.name.size() <= 80 &&
+      isValidCategory(data.category) &&
+      isValidTown(data.town) &&
+      data.address is string && data.address.size() >= 4 && data.address.size() <= 160 &&
+      data.contactPhone is string && data.contactPhone.size() >= 7 && data.contactPhone.size() <= 24 &&
+      (!('whatsappPhone' in data) || (data.whatsappPhone is string && data.whatsappPhone.size() <= 24)) &&
+      (!('openingHours' in data) || (data.openingHours is string && data.openingHours.size() <= 60)) &&
+      (!('latitude' in data) || (data.latitude is number && data.latitude >= -26.5 && data.latitude <= -24.5)) &&
+      (!('longitude' in data) || (data.longitude is number && data.longitude >= 31.0 && data.longitude <= 32.5)) &&
+      data.description is string && data.description.size() >= 10 && data.description.size() <= 400 &&
+      data.deliveryFee is number && data.deliveryFee >= 0 && data.deliveryFee <= 500 &&
+      data.etaMinutes is string && data.etaMinutes.size() >= 2 && data.etaMinutes.size() <= 30 &&
+      data.isOpen is bool &&
+      data.imageUrl is string && data.imageUrl.size() >= 5 && data.imageUrl.size() <= 250000 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidProduct(data, shopId) {
+      return data.keys().hasAll([
+        'shopId', 'ownerId', 'name', 'category', 'price',
+        'description', 'inStock', 'imageUrl', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'shopId', 'ownerId', 'name', 'category', 'price',
+        'description', 'specs', 'inStock', 'imageUrl', 'createdAt', 'updatedAt'
+      ]) &&
+      data.shopId == shopId &&
+      isValidId(data.shopId) &&
+      isValidId(data.ownerId) &&
+      data.name is string && data.name.size() >= 2 && data.name.size() <= 100 &&
+      isValidCategory(data.category) &&
+      data.price is number && data.price > 0 && data.price <= 250000 &&
+      data.description is string && data.description.size() >= 4 && data.description.size() <= 320 &&
+      (!('specs' in data) || (data.specs is string && data.specs.size() <= 120)) &&
+      data.inStock is bool &&
+      data.imageUrl is string && data.imageUrl.size() >= 5 && data.imageUrl.size() <= 250000 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'createdAt', 'updatedAt']) &&
+      data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'phone', 'defaultTown', 'defaultAddress', 'createdAt', 'updatedAt']) &&
+      data.uid == userId &&
+      isValidId(data.uid) &&
+      data.email is string && data.email.size() >= 5 && data.email.size() <= 160 &&
+      data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+      data.role in ['customer', 'owner'] &&
+      (!('phone' in data) || (data.phone is string && data.phone.size() <= 24)) &&
+      (!('defaultTown' in data) || (data.defaultTown is string && data.defaultTown.size() <= 40)) &&
+      (!('defaultAddress' in data) || (data.defaultAddress is string && data.defaultAddress.size() <= 160)) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll([
+        'customerId', 'customerName', 'customerEmail', 'customerPhone',
+        'deliveryTown', 'deliveryAddress', 'shopId', 'shopName', 'shopOwnerId',
+        'items', 'subtotal', 'deliveryFee', 'total', 'status', 'paymentMethod',
+        'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'customerId', 'customerName', 'customerEmail', 'customerPhone',
+        'deliveryTown', 'deliveryAddress', 'shopId', 'shopName', 'shopOwnerId',
+        'items', 'subtotal', 'deliveryFee', 'total', 'status', 'paymentMethod',
+        'notes', 'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.customerId) &&
+      data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 80 &&
+      data.customerEmail is string && data.customerEmail.size() >= 5 && data.customerEmail.size() <= 160 &&
+      data.customerPhone is string && data.customerPhone.size() >= 7 && data.customerPhone.size() <= 24 &&
+      isValidTown(data.deliveryTown) &&
+      data.deliveryAddress is string && data.deliveryAddress.size() >= 4 && data.deliveryAddress.size() <= 200 &&
+      isValidId(data.shopId) &&
+      data.shopName is string && data.shopName.size() >= 2 && data.shopName.size() <= 80 &&
+      isValidId(data.shopOwnerId) &&
+      data.items is list && data.items.size() >= 1 && data.items.size() <= 25 &&
+      data.items[0] is map &&
+      data.subtotal is number && data.subtotal >= 0 && data.subtotal <= 500000 &&
+      data.deliveryFee is number && data.deliveryFee >= 0 && data.deliveryFee <= 500 &&
+      data.total is number && data.total > 0 && data.total <= 500500 &&
+      isValidOrderStatus(data.status) &&
+      data.paymentMethod in ['cash_on_delivery', 'eft_on_delivery'] &&
+      (!('notes' in data) || (data.notes is string && data.notes.size() <= 250)) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll([
+        'userId', 'recipientEmail', 'orderId', 'shopName', 'status',
+        'subject', 'message', 'deliveryChannel', 'emailSent', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'userId', 'recipientEmail', 'orderId', 'shopName', 'status',
+        'subject', 'message', 'deliveryChannel', 'emailSent', 'createdAt'
+      ]) &&
+      isValidId(data.userId) &&
+      data.recipientEmail is string && data.recipientEmail.size() >= 5 && data.recipientEmail.size() <= 160 &&
+      isValidId(data.orderId) &&
+      data.shopName is string && data.shopName.size() >= 2 && data.shopName.size() <= 80 &&
+      isValidOrderStatus(data.status) &&
+      data.subject is string && data.subject.size() >= 3 && data.subject.size() <= 140 &&
+      data.message is string && data.message.size() >= 5 && data.message.size() <= 500 &&
+      data.deliveryChannel in ['smtp', 'resend', 'in_app'] &&
+      data.emailSent is bool &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidConversation(data) {
+      return data.keys().hasAll([
+        'shopId', 'shopName', 'shopOwnerId', 'customerId', 'customerName',
+        'lastMessage', 'lastSenderRole', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'shopId', 'shopName', 'shopOwnerId', 'customerId', 'customerName',
+        'customerEmail', 'lastOrderId', 'lastMessage', 'lastSenderRole',
+        'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.shopId) &&
+      data.shopName is string && data.shopName.size() >= 2 && data.shopName.size() <= 80 &&
+      isValidId(data.shopOwnerId) &&
+      isValidId(data.customerId) &&
+      data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 80 &&
+      (!('customerEmail' in data) || (data.customerEmail is string && data.customerEmail.size() <= 160)) &&
+      (!('lastOrderId' in data) || (data.lastOrderId is string && data.lastOrderId.size() <= 128)) &&
+      data.lastMessage is string && data.lastMessage.size() <= 240 &&
+      data.lastSenderRole in ['customer', 'owner'] &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    function isValidMessage(data, convId) {
+      return data.keys().hasAll([
+        'conversationId', 'customerId', 'shopOwnerId', 'senderId',
+        'senderName', 'senderRole', 'text', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'conversationId', 'customerId', 'shopOwnerId', 'senderId',
+        'senderName', 'senderRole', 'text', 'orderId', 'createdAt'
+      ]) &&
+      data.conversationId == convId &&
+      isValidId(data.conversationId) &&
+      isValidId(data.customerId) &&
+      isValidId(data.shopOwnerId) &&
+      isValidId(data.senderId) &&
+      data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
+      data.senderRole in ['customer', 'owner'] &&
+      data.text is string && data.text.size() >= 1 && data.text.size() <= 800 &&
+      (!('orderId' in data) || (data.orderId is string && data.orderId.size() <= 128)) &&
+      data.createdAt is timestamp;
+    }
+
+    // ---------------------------------------------------------
+    // Collection Rules
+    // ---------------------------------------------------------
+
+    // Shops: Publicly browsable local Nkomazi storefront directory
+    match /shops/{shopId} {
+      allow get: if isValidId(shopId) && resource != null && resource.data.name is string;
+      allow list: if isValidCategory(resource.data.category);
+
+      allow create: if isVerified() &&
+        isValidId(shopId) &&
+        isValidShop(incoming()) &&
+        (incoming().ownerId == request.auth.uid || isAdmin()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerified() &&
+        isValidId(shopId) &&
+        isValidShop(incoming()) &&
+        (existing().ownerId == request.auth.uid || isAdmin()) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'category', 'town', 'address', 'contactPhone',
+          'whatsappPhone', 'openingHours', 'description', 'deliveryFee',
+          'etaMinutes', 'isOpen', 'imageUrl', 'latitude', 'longitude', 'updatedAt'
+        ]);
+
+      allow delete: if isVerified() &&
+        isValidId(shopId) &&
+        (existing().ownerId == request.auth.uid || isAdmin());
+
+      // Products subcollection: Master Gate checks parent shop existence & owner
+      match /products/{productId} {
+        allow get: if isValidId(shopId) && isValidId(productId) && resource != null && resource.data.name is string;
+        allow list: if isValidCategory(resource.data.category);
+
+        allow create: if isVerified() &&
+          isValidId(shopId) &&
+          isValidId(productId) &&
+          isValidProduct(incoming(), shopId) &&
+          exists(/databases/$(database)/documents/shops/$(shopId)) &&
+          (get(/databases/$(database)/documents/shops/$(shopId)).data.ownerId == request.auth.uid || isAdmin()) &&
+          incoming().ownerId == get(/databases/$(database)/documents/shops/$(shopId)).data.ownerId &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time;
+
+        allow update: if isVerified() &&
+          isValidId(shopId) &&
+          isValidId(productId) &&
+          isValidProduct(incoming(), shopId) &&
+          exists(/databases/$(database)/documents/shops/$(shopId)) &&
+          (get(/databases/$(database)/documents/shops/$(shopId)).data.ownerId == request.auth.uid || isAdmin()) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().shopId == existing().shopId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'category', 'price', 'description', 'specs',
+            'inStock', 'imageUrl', 'updatedAt'
+          ]);
+
+        allow delete: if isVerified() &&
+          isValidId(shopId) &&
+          isValidId(productId) &&
+          exists(/databases/$(database)/documents/shops/$(shopId)) &&
+          (get(/databases/$(database)/documents/shops/$(shopId)).data.ownerId == request.auth.uid || isAdmin());
+      }
+    }
+
+    // Users: Strict PII isolation (owner or admin only; no list)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if false;
+
+      allow create: if isVerified() &&
+        isValidId(userId) &&
+        request.auth.uid == userId &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerified() &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        (request.auth.uid == userId || isAdmin()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'email', 'displayName', 'role', 'phone', 'defaultTown', 'defaultAddress', 'updatedAt'
+        ]);
+
+      allow delete: if false;
+    }
+
+    // Orders: Scoped to customer, shop owner, or admin; action-based updates with terminal state locking
+    match /orders/{orderId} {
+      allow get: if isSignedIn() && isValidId(orderId) && (
+        existing().customerId == request.auth.uid ||
+        existing().shopOwnerId == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow list: if isSignedIn() && (
+        resource.data.customerId == request.auth.uid ||
+        resource.data.shopOwnerId == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow create: if isVerified() &&
+        isValidId(orderId) &&
+        isValidOrder(incoming()) &&
+        incoming().customerId == request.auth.uid &&
+        incoming().status == 'pending' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          (
+            exists(/databases/$(database)/documents/shops/$(incoming().shopId)) &&
+            get(/databases/$(database)/documents/shops/$(incoming().shopId)).data.ownerId == incoming().shopOwnerId
+          ) ||
+          (
+            incoming().shopOwnerId == 'nkomazi_directory' &&
+            incoming().shopId.matches('^nkz_[a-z0-9_]+$')
+          )
+        );
+
+      allow update: if isVerified() &&
+        isValidId(orderId) &&
+        isValidOrder(incoming()) &&
+        incoming().customerId == existing().customerId &&
+        incoming().shopId == existing().shopId &&
+        incoming().shopOwnerId == existing().shopOwnerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          // Admin override
+          isAdmin() ||
+          // Action 1: Shop Owner advances active order status (terminal state locked)
+          (
+            existing().shopOwnerId == request.auth.uid &&
+            existing().status != 'delivered' &&
+            existing().status != 'cancelled' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          ) ||
+          // Action 2: Customer cancels while still pending
+          (
+            existing().customerId == request.auth.uid &&
+            existing().status == 'pending' &&
+            incoming().status == 'cancelled' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+
+      allow delete: if false;
+    }
+
+    // Notifications: Scoped to recipient user or admin; append-only
+    match /notifications/{notificationId} {
+      allow get: if isSignedIn() && isValidId(notificationId) && (
+        existing().userId == request.auth.uid || isAdmin()
+      );
+
+      allow list: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+      );
+
+      allow create: if isVerified() &&
+        isValidId(notificationId) &&
+        isValidNotification(incoming()) &&
+        incoming().createdAt == request.time &&
+        (
+          incoming().userId == request.auth.uid ||
+          isAdmin() ||
+          (
+            exists(/databases/$(database)/documents/orders/$(incoming().orderId)) &&
+            get(/databases/$(database)/documents/orders/$(incoming().orderId)).data.shopOwnerId == request.auth.uid &&
+            get(/databases/$(database)/documents/orders/$(incoming().orderId)).data.customerId == incoming().userId
+          )
+        );
+
+      allow update, delete: if false;
+    }
+
+    // Conversations: Real-time two-way messaging between customer and shop owner
+    match /conversations/{conversationId} {
+      allow get: if isSignedIn() && isValidId(conversationId) && (
+        resource == null ||
+        existing().customerId == request.auth.uid ||
+        existing().shopOwnerId == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow list: if isSignedIn() && (
+        resource.data.customerId == request.auth.uid ||
+        resource.data.shopOwnerId == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow create: if isVerified() &&
+        isValidId(conversationId) &&
+        isValidConversation(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          incoming().customerId == request.auth.uid ||
+          incoming().shopOwnerId == request.auth.uid ||
+          isAdmin()
+        ) &&
+        (
+          (
+            exists(/databases/$(database)/documents/shops/$(incoming().shopId)) &&
+            get(/databases/$(database)/documents/shops/$(incoming().shopId)).data.ownerId == incoming().shopOwnerId
+          ) ||
+          (
+            incoming().shopOwnerId == 'nkomazi_directory' &&
+            incoming().shopId.matches('^nkz_[a-z0-9_]+$')
+          )
+        );
+
+      allow update: if isVerified() &&
+        isValidId(conversationId) &&
+        isValidConversation(incoming()) &&
+        incoming().shopId == existing().shopId &&
+        incoming().shopOwnerId == existing().shopOwnerId &&
+        incoming().customerId == existing().customerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          existing().customerId == request.auth.uid ||
+          existing().shopOwnerId == request.auth.uid ||
+          isAdmin()
+        ) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'lastMessage', 'lastSenderRole', 'lastOrderId', 'customerName', 'updatedAt'
+        ]);
+
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow get: if isSignedIn() && isValidId(conversationId) && isValidId(messageId) && (
+          existing().customerId == request.auth.uid ||
+          existing().shopOwnerId == request.auth.uid ||
+          isAdmin()
+        );
+
+        allow list: if isSignedIn() && (
+          resource.data.customerId == request.auth.uid ||
+          resource.data.shopOwnerId == request.auth.uid ||
+          isAdmin()
+        );
+
+        allow create: if isVerified() &&
+          isValidId(conversationId) &&
+          isValidId(messageId) &&
+          isValidMessage(incoming(), conversationId) &&
+          incoming().senderId == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          exists(/databases/$(database)/documents/conversations/$(conversationId)) &&
+          incoming().customerId == get(/databases/$(database)/documents/conversations/$(conversationId)).data.customerId &&
+          incoming().shopOwnerId == get(/databases/$(database)/documents/conversations/$(conversationId)).data.shopOwnerId &&
+          (
+            get(/databases/$(database)/documents/conversations/$(conversationId)).data.customerId == request.auth.uid ||
+            get(/databases/$(database)/documents/conversations/$(conversationId)).data.shopOwnerId == request.auth.uid ||
+            isAdmin()
+          );
+
+        allow update, delete: if false;
+      }
+    }
+
+    // Admins: Read-only markers
+    match /admins/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list, write: if false;
+    }
+  }
+}
